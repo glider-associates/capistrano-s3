@@ -31,7 +31,7 @@ module Capistrano
             self.put_object(s3, bucket, "release/#{target_path}", path, file, only_gzip, extra_options)
           end
         end
-        file = Tempfile.new('/tmp/current_version')
+        file = Tempfile.new('current_version')
         file.write("release/#{target_path}")
         self.put_object(s3, bucket, 'current', "current_version", file, false, extra_options)
         file.close && file.unlink
@@ -140,16 +140,10 @@ module Capistrano
         end
 
         def self.delete_current(s3, bucket)
-          objects = Aws::S3::Bucket
-            .new(bucket, {client: s3})
-            .objects(prefix: 'current/')
+          s3bucket = Aws::S3::Bucket.new(bucket, {client: s3})
+          objects = s3bucket.objects(prefix: 'current/').map{|o| {key: o.key}}
           return unless objects
-          objects.each_slice(DELETE_OBJECT_MAX).to_a.each do |objects|
-            s3.delete_objects(
-              bucket: bucket,
-              delete: {objects: objects}
-            )
-          end
+          s3bucket.delete_objects delete: {objects: objects}
         end
 
         def self.put_object(s3, bucket, target_path, path, file, only_gzip, extra_options)
