@@ -1,18 +1,24 @@
 require 'aws-sdk'
 require 'mime/types'
 require 'fileutils'
+require 'tempfile'
 
 module Capistrano
   module S3
     module Publisher
       LAST_PUBLISHED_FILE = '.last_published'
       LAST_INVALIDATION_FILE = '.last_invalidation'
+      DELETE_OBJECT_MAX = 100
 
-      def self.publish!(region, key, secret, bucket, deployment_path, target_path, distribution_id, invalidations, exclusions, only_gzip, extra_options, stage = 'default')
+      def self.s3_keep_releases keep
+        #TODO keep 5 versions only
+      end
+
+      def self.publish!(region, key, secret, bucket, deployment_path, target_path, distribution_id, invalidations, exclusions, only_gzip, extra_options, stage = 'default', s3_keep_releases = 5)
         deployment_path_absolute = File.expand_path(deployment_path, Dir.pwd)
         s3 = self.establish_s3_client_connection!(region, key, secret)
-        updated = false
 
+        self.delete_current s3, bucket
         self.files(deployment_path_absolute, exclusions).each do |file|
           if !File.directory?(file)
             #next if self.published?(file, bucket, stage)
@@ -21,9 +27,15 @@ module Capistrano
             path = self.base_file_path(deployment_path_absolute, file)
             path.gsub!(/^\//, "") # Remove preceding slash for S3
 
-            self.put_object(s3, bucket, target_path, path, file, only_gzip, extra_options)
+            self.put_object(s3, bucket, 'current', path, file, only_gzip, extra_options)
+            self.put_object(s3, bucket, "release/#{target_path}", path, file, only_gzip, extra_options)
           end
         end
+        file = Tempfile.new('/tmp/current_version')
+        file.write("release/#{target_path}")
+        self.put_object(s3, bucket, 'current', "current_version", file, false, extra_options)
+        file.close && file.unlink
+        self.s3_keep_releases s3_keep_releases
 
         # invalidate CloudFront distribution if needed
         if distribution_id && !invalidations.empty?
@@ -125,6 +137,19 @@ module Capistrano
         def self.published?(file, bucket, stage)
           return false unless last_publish_time = self.last_published["#{bucket}::#{stage}"]
           File.mtime(file) < Time.parse(last_publish_time)
+        end
+
+        def self.delete_current(s3, bucket)
+          objects = Aws::S3::Bucket
+            .new(bucket, {client: s3})
+            .objects(prefix: 'current/')
+          return unless objects
+          objects.each_slice(DELETE_OBJECT_MAX).to_a.each do |objects|
+            s3.delete_objects(
+              bucket: bucket,
+              delete: {objects: objects}
+            )
+          end
         end
 
         def self.put_object(s3, bucket, target_path, path, file, only_gzip, extra_options)
