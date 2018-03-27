@@ -142,7 +142,7 @@ module Capistrano
         def self.delete_current(s3, bucket)
           s3bucket = Aws::S3::Bucket.new(bucket, {client: s3})
           objects = s3bucket.objects(prefix: 'current/').map{|o| {key: o.key}}
-          return unless objects
+          return if objects.size.zero?
           s3bucket.delete_objects delete: {objects: objects}
         end
 
